@@ -6,7 +6,6 @@ Dayynime API — Real scraper + halaman dokumentasi
 from flask import Flask, jsonify, request, render_template_string
 from bs4 import BeautifulSoup
 from markupsafe import Markup
-from collections import defaultdict
 import cloudscraper, base64, re, json as _json, time
 
 app = Flask(__name__)
@@ -19,97 +18,6 @@ CACHE_TTL = {
     "detail": 600, "episode": 180, "genres": 3600,
     "schedule": 1800,
 }
-
-# ── Rate Limiter ──────────────────────────────────────────────
-RATE_LIMIT    = 70    # max request normal
-RATE_WINDOW   = 60    # per 60 detik (1 menit)
-WARN_COUNT    = 3     # jumlah peringatan sebelum ban
-BAN_DURATION  = 300   # ban 5 menit (detik)
-
-_rate_store   = defaultdict(list)   # { ip: [timestamp, ...] }
-_warn_store   = defaultdict(int)    # { ip: jumlah_peringatan }
-_ban_store    = {}                  # { ip: ban_until_timestamp }
-
-def _get_ip():
-    return (
-        request.headers.get("x-forwarded-for", "").split(",")[0].strip()
-        or request.headers.get("x-real-ip", "")
-        or request.remote_addr
-        or "unknown"
-    )
-
-@app.before_request
-def check_rate_limit():
-    if not request.path.startswith("/anime/"):
-        return
-
-    ip  = _get_ip()
-    now = time.time()
-
-    # ── Cek apakah sedang kena ban ──
-    if ip in _ban_store:
-        ban_until = _ban_store[ip]
-        if now < ban_until:
-            sisa = int(ban_until - now)
-            resp = jsonify({
-                "status":      "banned",
-                "message":     f"🚫 IP kamu di-ban sementara karena melebihi batas request. Coba lagi dalam {sisa} detik.",
-                "retry_after": sisa,
-                "ban_duration": BAN_DURATION,
-            })
-            resp.status_code = 429
-            resp.headers["Retry-After"] = str(sisa)
-            return resp
-        else:
-            # Ban sudah habis, reset
-            del _ban_store[ip]
-            _warn_store[ip] = 0
-
-    # ── Hitung request dalam window ──
-    _rate_store[ip] = [t for t in _rate_store[ip] if now - t < RATE_WINDOW]
-    req_count = len(_rate_store[ip])
-
-    if req_count < RATE_LIMIT:
-        # Masih aman, catat request
-        _rate_store[ip].append(now)
-        return
-
-    # ── Sudah melebihi limit, beri peringatan dulu ──
-    _warn_store[ip] += 1
-    warn_ke = _warn_store[ip]
-
-    if warn_ke <= WARN_COUNT:
-        # Masih dalam tahap peringatan
-        oldest = min(_rate_store[ip])
-        retry  = int(RATE_WINDOW - (now - oldest)) + 1
-        sisa_warn = WARN_COUNT - warn_ke
-        resp = jsonify({
-            "status":       "warning",
-            "message":      f"⚠️ Peringatan {warn_ke}/{WARN_COUNT}: Kamu melebihi batas {RATE_LIMIT} request per menit! {'Sisa ' + str(sisa_warn) + ' peringatan sebelum di-ban.' if sisa_warn > 0 else 'Ini peringatan terakhir! Request berikutnya akan di-ban.'}",
-            "warning_ke":   warn_ke,
-            "sisa_peringatan": sisa_warn,
-            "retry_after":  retry,
-            "limit":        RATE_LIMIT,
-        })
-        resp.status_code = 429
-        resp.headers["Retry-After"]       = str(retry)
-        resp.headers["X-RateLimit-Limit"] = str(RATE_LIMIT)
-        resp.headers["X-Warning-Count"]   = str(warn_ke)
-        return resp
-    else:
-        # Peringatan habis → BAN
-        _ban_store[ip] = now + BAN_DURATION
-        _warn_store[ip] = 0
-        _rate_store[ip] = []
-        resp = jsonify({
-            "status":       "banned",
-            "message":      f"🚫 IP kamu di-ban selama {BAN_DURATION // 60} menit karena terus melebihi batas request setelah {WARN_COUNT}x peringatan.",
-            "retry_after":  BAN_DURATION,
-            "ban_duration": BAN_DURATION,
-        })
-        resp.status_code = 429
-        resp.headers["Retry-After"] = str(BAN_DURATION)
-        return resp
 
 # ══════════════════════════════════════════════════════
 # SCRAPER CORE
@@ -411,16 +319,6 @@ pre{font-family:var(--mono);font-size:12px;line-height:1.75;padding:16px;overflo
 pre::-webkit-scrollbar{height:3px}
 pre::-webkit-scrollbar-thumb{background:var(--border2);border-radius:99px}
 .jk{color:#7dd3fc}.js{color:#86efac}.jn{color:#fbbf24}.jb{color:#f472b6}.jl{color:#94a3b8}
-.rl-box{background:rgba(220,38,38,0.07);border:1px solid rgba(220,38,38,0.35);border-left:4px solid #ef4444;border-radius:12px;padding:22px 24px;margin-bottom:28px}
-.rl-box-title{font-size:17px;font-weight:900;color:#f87171;margin-bottom:16px;letter-spacing:0.5px}
-.rl-row{display:flex;gap:10px;margin-bottom:10px;font-size:14px;line-height:1.6}
-.rl-key{color:var(--text3);font-family:var(--mono);font-size:12px;white-space:nowrap;padding-top:2px;min-width:110px}
-.rl-val{color:var(--text)}
-.rl-val strong{color:#f87171}
-.rl-divider{height:1px;background:rgba(220,38,38,0.2);margin:14px 0}
-.rl-note{font-size:13px;color:var(--text2);margin-bottom:8px;line-height:1.6}
-.rl-roast{margin-top:14px;padding:10px 16px;background:rgba(220,38,38,0.1);border-radius:8px;font-size:13px;font-weight:700;color:#fca5a5;text-align:center;letter-spacing:0.3px}
-@media(max-width:480px){.rl-row{flex-direction:column;gap:2px}.rl-key{min-width:unset}}
 .footer{text-align:center;padding:32px 20px;border-top:1px solid var(--border);font-family:var(--mono);font-size:11px;color:var(--text3)}
 .footer a{color:var(--accent2);text-decoration:none}
 @media(max-width:480px){.header{padding:36px 16px 32px}.main{padding:24px 14px 60px}.ep-header{padding:14px 16px}.path-box{margin:0 16px;font-size:12px}.ep-body{padding:12px 16px 18px}}
@@ -443,17 +341,6 @@ pre::-webkit-scrollbar-thumb{background:var(--border2);border-radius:99px}
   </div>
 </div>
 <div class="main">
-  <!-- Rate Limit Warning Box -->
-  <div class="rl-box">
-    <div class="rl-box-title">🚨 PERINGATAN RATE LIMIT</div>
-    <div class="rl-row"><span class="rl-key">Rate Limit:</span><span class="rl-val">70 permintaan per menit</span></div>
-    <div class="rl-row"><span class="rl-key">Pelanggaran:</span><span class="rl-val">Jika Anda melewati batas, Anda akan mendapatkan 3 kali peringatan sebelum <strong>BAN PERMANEN</strong></span></div>
-    <div class="rl-divider"></div>
-    <div class="rl-note">⚡ Gunakan API dengan bijak dan jangan spamming!</div>
-    <div class="rl-note">🛡️ Tujuan Rate Limit: Melindungi server dari serangan Hama DDoS dan aktivitas spammer yang dapat mengganggu layanan untuk pengguna lain.</div>
-    <div class="rl-roast">MINIMAL TAU DIRI.. DI KASI AKSES GRATIS MALAH NGELUNJAK</div>
-  </div>
-
   <div class="section-header">
     <span class="section-icon">📡</span>
     <span class="section-title">Dayynime API Endpoints</span>
