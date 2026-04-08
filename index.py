@@ -7,23 +7,18 @@ from flask import Flask, jsonify, request, render_template_string
 from bs4 import BeautifulSoup
 from markupsafe import Markup
 from collections import defaultdict
-from upstash_redis import Redis
 import cloudscraper, base64, re, json as _json, time
 
 app = Flask(__name__)
 
 BASE_URL  = "https://v1.animasu.app"
+CACHE     = {}
 CACHE_TTL = {
     "home": 300, "ongoing": 180, "completed": 600,
     "movies": 600, "popular": 600, "search": 120,
     "detail": 600, "episode": 180, "genres": 3600,
     "schedule": 1800,
 }
-
-redis = Redis(
-    url="https://just-reindeer-59906.upstash.io",
-    token="AeoCAAIncDJiN2JiY2E4ZjM4MGE0NDBmOTUwNThhYzc4NzY1Yzk2N3AyNTk5MDY",
-)
 
 # ── Rate Limiter ──────────────────────────────────────────────
 RATE_LIMIT    = 70    # max request normal
@@ -133,18 +128,14 @@ def _scraper():
     return s
 
 def _cached(key, ttl_type, fn):
-    try:
-        val = redis.get(key)
-        if val:
-            return _json.loads(val)
-    except Exception:
-        pass
+    now = time.time()
+    if key in CACHE:
+        data, ts = CACHE[key]
+        if now - ts < CACHE_TTL.get(ttl_type, 300):
+            return data
     data = fn()
     if data:
-        try:
-            redis.set(key, _json.dumps(data, ensure_ascii=False), ex=CACHE_TTL.get(ttl_type, 300))
-        except Exception:
-            pass
+        CACHE[key] = (data, now)
     return data
 
 def _get(path_or_url):
